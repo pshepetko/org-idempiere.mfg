@@ -20,6 +20,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Properties;
 
 import org.adempiere.exceptions.AdempiereException;
@@ -38,6 +39,7 @@ import org.compiere.util.CLogger;
 import org.compiere.util.DB;
 import org.compiere.util.Env;
 import org.libero.model.MPPCostCollector;
+import org.libero.model.MPPOrder;
 import org.libero.model.MPPOrderCost;
 import org.libero.model.RoutingService;
 import org.libero.model.RoutingServiceFactory;
@@ -178,6 +180,58 @@ public class CostEngine
 		.setParameters(params)
 		.firstOnly();
 	}	
+	
+	private BigDecimal calculateFG(MPPCostCollector current, MCostElement element, boolean isVariance) {
+		List<MPPCostCollector> ccs = new Query(current.getCtx(), MPPCostCollector.Table_Name, "DocStatus='CO' AND PP_Order_ID=?", current.get_TrxName())
+				.setParameters(current.getPP_Order_ID())
+				.list();
+		
+		MPPOrder mo = current.getPP_Order();
+		BigDecimal totalMO = mo.getQtyEntered();
+		BigDecimal deliveredQty = mo.getQtyDelivered();
+		BigDecimal deliveredIssue = Env.ZERO;
+		BigDecimal amtIssue = Env.ZERO;
+		BigDecimal FOHCosts = Env.ZERO;
+		
+		if(current.isReversal())
+			deliveredQty = deliveredQty.add(current.getMovementQty());
+		
+		for(MPPCostCollector cc :  ccs){
+			MCostDetail cd = getCostDetail(cc);
+			if(cd==null)
+				continue;
+			if(cc.getCostCollectorType().equals(MPPCostCollector.COSTCOLLECTORTYPE_ComponentIssue)){
+				amtIssue = amtIssue.add(cd.getAmt().abs());
+			}else if(cc.getCostCollectorType().equals(MPPCostCollector.COSTCOLLECTORTYPE_MaterialReceipt)){
+				if(current.isReversal() && cc.get_ID()==current.getReversal_ID())
+					continue;
+				
+				deliveredIssue = deliveredIssue.add(cd.getAmt().abs());
+			}else if(cc.getCostCollectorType().equals(MPPCostCollector.COSTCOLLECTORTYPE_ActivityControl)){
+				FOHCosts = FOHCosts.add(cd.getAmt().abs());
+			}else if(cc.getCostCollectorType().equals(MPPCostCollector.COSTCOLLECTORTYPE_MixVariance)){
+				amtIssue = amtIssue.add(cd.getAmt().abs());
+			}
+		}
+		
+		if(isVariance){
+			return amtIssue.add(FOHCosts).subtract(deliveredIssue);
+		}else{
+			BigDecimal remainingIssue = amtIssue.add(FOHCosts).subtract(deliveredIssue);
+			BigDecimal movementQty = current.getMovementQty().abs();
+			BigDecimal percentage = movementQty.divide(totalMO.subtract(deliveredQty), 8, RoundingMode.HALF_EVEN);
+			return percentage.multiply(remainingIssue);
+		}
+	}
+
+	private MCostDetail getCostDetail(MPPCostCollector cc)
+	{
+		final String whereClause = MCostDetail.COLUMNNAME_PP_Cost_Collector_ID+"=?";
+		MCostDetail cd = new Query(cc.getCtx(), MCostDetail.Table_Name, whereClause, cc.get_TrxName())
+		.setParameters(new Object[]{cc.getPP_Cost_Collector_ID()})
+		.first();
+		return cd;
+	}
 
 	/**
 	 * Create Cost Detail (Material Issue, Material Receipt)
@@ -207,7 +261,14 @@ public class CostEngine
 				// Get Costs
 				final BigDecimal qty = mtrx.getMovementQty();
 				final BigDecimal price = getProductActualCostPrice(cc, product, as, element, mtrx.get_TrxName());
-				final BigDecimal amt = roundCost(price.multiply(qty), as.getC_AcctSchema_ID());
+				BigDecimal amt = roundCost(price.multiply(qty), as.getC_AcctSchema_ID());
+				
+				if(element.getCostElementType().equals(MCostElement.COSTELEMENTTYPE_Material) && cc.getCostCollectorType().equals(MPPCostCollector.COSTCOLLECTORTYPE_MaterialReceipt)){
+					amt = calculateFG(cc, element, false);
+				}
+				
+				if(cc.isReversal())
+					amt = amt.negate();
 				//
 				// Create / Update Cost Detail
 				MCostDetail cd = getCostDetail(model, mtrx ,as, element.get_ID());
