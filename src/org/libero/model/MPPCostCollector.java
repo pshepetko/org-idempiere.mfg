@@ -24,6 +24,7 @@ import java.sql.Timestamp;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Properties;
+import java.util.logging.Level;
 
 import org.adempiere.exceptions.AdempiereException;
 import org.adempiere.exceptions.DocTypeNotFoundException;
@@ -72,6 +73,8 @@ import org.libero.tables.X_PP_Cost_Collector;
 public class MPPCostCollector extends X_PP_Cost_Collector implements DocAction , IDocumentLine
 {
 	private static final long serialVersionUID = 1L;
+	
+	private boolean isReversal = false;
 	
     /**
      * Create & Complete Cost Collector 
@@ -578,10 +581,56 @@ public class MPPCostCollector extends X_PP_Cost_Collector implements DocAction ,
 		return true;
 	}	//	closeIt
 
-//	@Override
+	@Override
 	public boolean reverseCorrectIt()
 	{
-		return false;
+		if (log.isLoggable(Level.INFO)) log.info(toString());
+		// Before reverseCorrect
+		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_BEFORE_REVERSECORRECT);
+		if (m_processMsg != null)
+			return false;
+		
+		MPPCostCollector reversal = new MPPCostCollector(getCtx(), 0, get_TrxName());
+		reversal.setAD_Org_ID(getAD_Org_ID());
+		reversal.setReversal_ID(get_ID());
+		reversal.setIsReversal(true);
+		reversal.setPP_Order_ID(getPP_Order_ID());
+		reversal.setPP_Order_BOMLine_ID(getPP_Order_BOMLine_ID());
+		reversal.setCostCollectorType(getCostCollectorType());
+		reversal.setC_DocTypeTarget_ID(getC_DocTypeTarget_ID());
+		reversal.setC_DocType_ID(getC_DocType_ID());
+		reversal.setMovementDate(new Timestamp(System.currentTimeMillis())); // Enhancement #521
+		reversal.setDateAcct(getDateAcct());
+		reversal.setS_Resource_ID(getS_Resource_ID());
+		reversal.setM_Warehouse_ID(getM_Warehouse_ID());
+		reversal.setM_Locator_ID(getM_Locator_ID());
+		reversal.setM_Product_ID(getM_Product_ID());
+		reversal.setMovementQty(getMovementQty().negate());
+		reversal.setC_UOM_ID(getC_UOM_ID());		
+		reversal.setDescription(" -> "+getDocumentNo());
+		reversal.setM_AttributeSetInstance_ID(getM_AttributeSetInstance_ID());
+		reversal.setC_Campaign_ID(getC_Campaign_ID());
+		
+		reversal.saveEx();
+		if (!reversal.processIt(DOCACTION_Complete))
+			throw new AdempiereException("Reversal Document failed to complete." + reversal.getProcessMsg());
+		
+		setDescription(" -> " + reversal.getDocumentNo());		
+		reversal.setDocStatus(DOCSTATUS_Reversed);
+		reversal.setDocAction(DOCACTION_None);
+		reversal.saveEx();		
+
+		// After reverseCorrect
+		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_AFTER_REVERSECORRECT);
+		if (m_processMsg != null)
+			return false;
+		
+		
+		setDocStatus(DOCSTATUS_Reversed);		//	 may come from void
+		setDocAction(DOCACTION_None);
+		setProcessed(true);
+		saveEx(get_TrxName());
+		return true;
 	}
 
 //	@Override
@@ -980,5 +1029,13 @@ public class MPPCostCollector extends X_PP_Cost_Collector implements DocAction ,
 	{
 		
 		setIsSubcontracting(MPPOrderNode.get(getCtx(), PP_Order_Node_ID, get_TrxName()).isSubcontracting());
+	}
+	
+	public void setIsReversal(boolean isReversal){
+		this.isReversal = isReversal;
+	}
+
+	public boolean isReversal(){
+		return this.isReversal;
 	}
 }	//	MPPCostCollector
