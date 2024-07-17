@@ -253,7 +253,7 @@ public class CostEngine
 			int M_AttributeSetInstance_ID)
 	{
 		//	Delete Unprocessed zero Differences
-		String sql = "DELETE " + MCostDetail.Table_Name
+		String sql = "DELETE FROM " + MCostDetail.Table_Name
 		+ " WHERE Processed='N' AND COALESCE(DeltaAmt,0)=0 AND COALESCE(DeltaQty,0)=0"
 		+ " AND "+model.get_TableName()+"_ID=?" 
 		+ " AND "+MCostDetail.COLUMNNAME_C_AcctSchema_ID+"=?" 

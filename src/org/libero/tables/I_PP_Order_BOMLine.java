@@ -495,7 +495,7 @@ public interface I_PP_Order_BOMLine
 	public BigDecimal getQtyReject();
 
     /** Column name QtyRequired */
-    public static final String COLUMNNAME_QtyRequired = "QtyRequired";
+    public static final String COLUMNNAME_QtyRequired = "QtyRequiered";
 
 	/** Set Qty Required	  */
 	public void setQtyRequired (BigDecimal QtyRequired);

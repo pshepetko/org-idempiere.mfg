@@ -158,7 +158,7 @@ public class OrderReceiptIssue extends GenForm {
 				+ "p.Value," // 3
 				+ "obl.M_Product_ID,p.Name," // 4,5
 				+ "p.C_UOM_ID,u.Name," // 6,7
-				+ "obl.QtyRequired," // 8
+				+ "obl.QtyRequiered," // 8
 				+ "obl.QtyReserved," // 9
 				+ "bomQtyAvailable(obl.M_Product_ID,obl.M_Warehouse_ID,0 ) AS QtyAvailable," // 10
 				+ "bomQtyOnHand(obl.M_Product_ID,obl.M_Warehouse_ID,0) AS QtyOnHand," // 11
@@ -168,7 +168,7 @@ public class OrderReceiptIssue extends GenForm {
 				+ "obl.isQtyPercentage," // 16
 				+ "obl.QtyBatch," // 17
 				+ "obl.ComponentType," // 18
-				+ "obl.QtyRequired - QtyDelivered AS QtyOpen," // 19
+				+ "obl.QtyRequiered - QtyDelivered AS QtyOpen," // 19
 				+ "obl.QtyDelivered" // 20
 				+ " FROM PP_Order_BOMLine obl"
 				+ " INNER JOIN M_Product p ON (obl.M_Product_ID = p.M_Product_ID) "
@@ -318,7 +318,7 @@ public class OrderReceiptIssue extends GenForm {
 				+ "p.Value," // 3
 				+ "obl.M_Product_ID,p.Name," // 4,5
 				+ "p.C_UOM_ID,u.Name," // 6,7
-				+ "obl.QtyRequired," // 8
+				+ "obl.QtyRequiered," // 8
 				+ "obl.QtyReserved," // 9
 				+ "bomQtyAvailable(obl.M_Product_ID,obl.M_Warehouse_ID,0 ) AS QtyAvailable," // 10
 				+ "bomQtyOnHand(obl.M_Product_ID,obl.M_Warehouse_ID,0) AS QtyOnHand," // 11
@@ -328,7 +328,7 @@ public class OrderReceiptIssue extends GenForm {
 				+ "obl.isQtyPercentage," // 16
 				+ "obl.QtyBatch," // 17
 				+ "obl.ComponentType," // 18
-				+ "obl.QtyRequired - QtyDelivered AS QtyOpen," // 19
+				+ "obl.QtyRequiered - QtyDelivered AS QtyOpen," // 19
 				+ "obl.QtyDelivered" // 20
 				+ " FROM PP_Order_BOMLine obl"
 				+ " INNER JOIN M_Product p ON (obl.M_Product_ID = p.M_Product_ID) "
