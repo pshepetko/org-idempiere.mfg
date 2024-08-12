@@ -13,7 +13,7 @@ public class Callout_PP_Order_BOMLine extends CalloutBOM implements IColumnCallo
 			GridField mField, Object value, Object oldValue) {
 		if (mField.getColumnName().equals("QtyEntered"))
 			return qtyLine(ctx, WindowNo, mTab, mField,value);
-		if (mField.getColumnName().equals("QtyRequired"))
+		if (mField.getColumnName().equals("QtyRequiered"))
 			return qtyLine(ctx, WindowNo, mTab, mField,value);
 		 
 		return null;

@@ -130,7 +130,7 @@ public class BOMWrapper extends AbstractPOWrapper {
 		String value = null;
 		if(get() instanceof MPPProductBOM) {
 			
-			value = ((MPPProductBOM)get()).getDocumentNo();
+			value = ((MPPProductBOM)get()).getValue();
 		}
 		else if(get() instanceof MPPOrderBOM) {
 			

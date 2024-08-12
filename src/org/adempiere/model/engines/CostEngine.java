@@ -20,6 +20,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Properties;
 
 import org.adempiere.exceptions.AdempiereException;
@@ -30,6 +31,7 @@ import org.compiere.model.MCost;
 import org.compiere.model.MCostDetail;
 import org.compiere.model.MCostElement;
 import org.compiere.model.MProduct;
+import org.compiere.model.MProductCategoryAcct;
 import org.compiere.model.MTransaction;
 import org.compiere.model.PO;
 import org.compiere.model.Query;
@@ -37,6 +39,7 @@ import org.compiere.util.CLogger;
 import org.compiere.util.DB;
 import org.compiere.util.Env;
 import org.libero.model.MPPCostCollector;
+import org.libero.model.MPPOrder;
 import org.libero.model.MPPOrderCost;
 import org.libero.model.RoutingService;
 import org.libero.model.RoutingServiceFactory;
@@ -52,9 +55,14 @@ public class CostEngine
 	/**	Logger							*/
 	protected transient CLogger	log = CLogger.getCLogger (getClass());
 	
-	public String getCostingMethod()
+	public String getCostingMethod(MProduct product, int C_AcctSchema_ID)
 	{
-		return MCostElement.COSTINGMETHOD_StandardCosting;
+		MProductCategoryAcct acct = MProductCategoryAcct.get(product.getCtx(), product.getM_Product_Category_ID(), C_AcctSchema_ID, null);
+		String costingMethod = MCostElement.COSTINGMETHOD_StandardCosting; 
+		if(acct!=null && acct.getCostingMethod()!=null && !acct.getCostingMethod().isEmpty())
+			costingMethod = acct.getCostingMethod();
+		
+		return costingMethod;
 	}
 	
 	public BigDecimal getResourceStandardCostRate(MPPCostCollector cc, int S_Resource_ID, CostDimension d, String trxName)
@@ -172,6 +180,58 @@ public class CostEngine
 		.setParameters(params)
 		.firstOnly();
 	}	
+	
+	private BigDecimal calculateFG(MPPCostCollector current, MCostElement element, boolean isVariance) {
+		List<MPPCostCollector> ccs = new Query(current.getCtx(), MPPCostCollector.Table_Name, "DocStatus='CO' AND PP_Order_ID=?", current.get_TrxName())
+				.setParameters(current.getPP_Order_ID())
+				.list();
+		
+		MPPOrder mo = current.getPP_Order();
+		BigDecimal totalMO = mo.getQtyEntered();
+		BigDecimal deliveredQty = mo.getQtyDelivered();
+		BigDecimal deliveredIssue = Env.ZERO;
+		BigDecimal amtIssue = Env.ZERO;
+		BigDecimal FOHCosts = Env.ZERO;
+		
+		if(current.isReversal())
+			deliveredQty = deliveredQty.add(current.getMovementQty());
+		
+		for(MPPCostCollector cc :  ccs){
+			MCostDetail cd = getCostDetail(cc);
+			if(cd==null)
+				continue;
+			if(cc.getCostCollectorType().equals(MPPCostCollector.COSTCOLLECTORTYPE_ComponentIssue)){
+				amtIssue = amtIssue.add(cd.getAmt().abs());
+			}else if(cc.getCostCollectorType().equals(MPPCostCollector.COSTCOLLECTORTYPE_MaterialReceipt)){
+				if(current.isReversal() && cc.get_ID()==current.getReversal_ID())
+					continue;
+				
+				deliveredIssue = deliveredIssue.add(cd.getAmt().abs());
+			}else if(cc.getCostCollectorType().equals(MPPCostCollector.COSTCOLLECTORTYPE_ActivityControl)){
+				FOHCosts = FOHCosts.add(cd.getAmt().abs());
+			}else if(cc.getCostCollectorType().equals(MPPCostCollector.COSTCOLLECTORTYPE_MixVariance)){
+				amtIssue = amtIssue.add(cd.getAmt().abs());
+			}
+		}
+		
+		if(isVariance){
+			return amtIssue.add(FOHCosts).subtract(deliveredIssue);
+		}else{
+			BigDecimal remainingIssue = amtIssue.add(FOHCosts).subtract(deliveredIssue);
+			BigDecimal movementQty = current.getMovementQty().abs();
+			BigDecimal percentage = movementQty.divide(totalMO.subtract(deliveredQty), 8, RoundingMode.HALF_EVEN);
+			return percentage.multiply(remainingIssue);
+		}
+	}
+
+	private MCostDetail getCostDetail(MPPCostCollector cc)
+	{
+		final String whereClause = MCostDetail.COLUMNNAME_PP_Cost_Collector_ID+"=?";
+		MCostDetail cd = new Query(cc.getCtx(), MCostDetail.Table_Name, whereClause, cc.get_TrxName())
+		.setParameters(new Object[]{cc.getPP_Cost_Collector_ID()})
+		.first();
+		return cd;
+	}
 
 	/**
 	 * Create Cost Detail (Material Issue, Material Receipt)
@@ -187,12 +247,12 @@ public class CostEngine
 			final MProduct product = MProduct.get(mtrx.getCtx(), mtrx.getM_Product_ID());
 			final String costingMethod = product.getCostingMethod(as);
 			// Check costing method
-			if (!getCostingMethod().equals(costingMethod))
+			if (!getCostingMethod(product, as.getC_AcctSchema_ID()).equals(costingMethod))
 			{
 				throw new AdempiereException("Costing method not supported - "+costingMethod);
 			}
 			//
-			for (MCostElement element : getCostElements(mtrx.getCtx()))
+			for (MCostElement element : getCostElements(mtrx.getCtx(), product, as))
 			{
 				//
 				//	Delete Unprocessed zero Differences
@@ -201,7 +261,14 @@ public class CostEngine
 				// Get Costs
 				final BigDecimal qty = mtrx.getMovementQty();
 				final BigDecimal price = getProductActualCostPrice(cc, product, as, element, mtrx.get_TrxName());
-				final BigDecimal amt = roundCost(price.multiply(qty), as.getC_AcctSchema_ID());
+				BigDecimal amt = roundCost(price.multiply(qty), as.getC_AcctSchema_ID());
+				
+				if(element.getCostElementType().equals(MCostElement.COSTELEMENTTYPE_Material) && cc.getCostCollectorType().equals(MPPCostCollector.COSTCOLLECTORTYPE_MaterialReceipt)){
+					amt = calculateFG(cc, element, false);
+				}
+				
+				if(cc.isReversal())
+					amt = amt.negate();
 				//
 				// Create / Update Cost Detail
 				MCostDetail cd = getCostDetail(model, mtrx ,as, element.get_ID());
@@ -253,7 +320,7 @@ public class CostEngine
 			int M_AttributeSetInstance_ID)
 	{
 		//	Delete Unprocessed zero Differences
-		String sql = "DELETE " + MCostDetail.Table_Name
+		String sql = "DELETE FROM " + MCostDetail.Table_Name
 		+ " WHERE Processed='N' AND COALESCE(DeltaAmt,0)=0 AND COALESCE(DeltaQty,0)=0"
 		+ " AND "+model.get_TableName()+"_ID=?" 
 		+ " AND "+MCostDetail.COLUMNNAME_C_AcctSchema_ID+"=?" 
@@ -288,9 +355,9 @@ public class CostEngine
 		|| MCostElement.COSTELEMENTTYPE_BurdenMOverhead.equals(costElementType);
 	}
 
-	private Collection<MCostElement> getCostElements(Properties ctx)
+	private Collection<MCostElement> getCostElements(Properties ctx, MProduct product, MAcctSchema schema)
 	{
-		return MCostElement.getByCostingMethod(ctx, getCostingMethod());
+		return MCostElement.getByCostingMethod(ctx, getCostingMethod(product, schema.getC_AcctSchema_ID()));
 	}
 	
 	private Collection<MAcctSchema> getAcctSchema(PO po)
@@ -382,7 +449,7 @@ public class CostEngine
 		final BigDecimal qty = routingService.getResourceBaseValue(cc.getS_Resource_ID(), cc);
 		for (MAcctSchema as : getAcctSchema(cc))
 		{
-			for (MCostElement element : getCostElements(cc.getCtx()))
+			for (MCostElement element : getCostElements(cc.getCtx(), product, as))
 			{
 				if (!isActivityControlElement(element))
 				{
@@ -439,7 +506,7 @@ public class CostEngine
 		//
 		for(MAcctSchema as : getAcctSchema(ccuv))
 		{
-			for (MCostElement element : getCostElements(ccuv.getCtx()))
+			for (MCostElement element : getCostElements(ccuv.getCtx(), product, as))
 			{
 				final BigDecimal price = getProductActualCostPrice(ccuv, product, as, element, ccuv.get_TrxName());
 				final BigDecimal amt = roundCost(price.multiply(qty), as.getC_AcctSchema_ID());
@@ -476,7 +543,7 @@ public class CostEngine
 		MPPCostCollector ccrv = null; // Cost Collector - Rate Variance
 		for (MAcctSchema as : getAcctSchema(cc))
 		{
-			for (MCostElement element : getCostElements(cc.getCtx()))
+			for (MCostElement element : getCostElements(cc.getCtx(), product, as))
 			{
 				final MCostDetail cd = getCostDetail(cc, element.getM_CostElement_ID());
 				if (cd == null)
@@ -520,7 +587,7 @@ public class CostEngine
 			for (MAcctSchema as : getAcctSchema(cc))
 			{
 			
-				for (MCostElement element : getCostElements(cc.getCtx()))
+				for (MCostElement element : getCostElements(cc.getCtx(), cc.getM_Product(), as))
 				{
 					final MProduct product = cc.getM_Product(); 
 					final BigDecimal qty = cc.getMovementQty();
@@ -548,7 +615,7 @@ public class CostEngine
 		final RoutingService routingService = RoutingServiceFactory.get().getRoutingService(cc.getAD_Client_ID());
 		for (MAcctSchema as : getAcctSchema(cc))
 		{
-			for (MCostElement element : getCostElements(cc.getCtx()))
+			for (MCostElement element : getCostElements(cc.getCtx(), cc.getM_Product(), as))
 			{
 				final MProduct resourcePStd = MProduct.forS_Resource_ID(cc.getCtx(), std_resource_id, null); 
 				final MProduct resourcePActual = MProduct.forS_Resource_ID(cc.getCtx(), actual_resource_id, null);
